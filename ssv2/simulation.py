@@ -30,8 +30,8 @@ class BaseSimulation:
         self.max_y = np.max(self.bead_df["y_coord"])
 
     def round_coordinates(self, df):
-        df["x_coord"] = df["x_coord"].apply(lambda x: round(x, 4))
-        df["y_coord"] = df["y_coord"].apply(lambda x: round(x, 4))
+        df["x_coord"] = df["x_coord"].apply(lambda x: round(x, 3))
+        df["y_coord"] = df["y_coord"].apply(lambda x: round(x, 3))
         return df
 
     def build_hexagonal_grid(self, row_count, beads_per_row):
@@ -109,6 +109,7 @@ class BaseSimulation:
         beads_near_center_df["y_displacement"] = (
             beads_near_center_df["y_coord"] - self.central_bead_y
         )
+        beads_near_center_df = self.round_coordinates(beads_near_center_df)
         return beads_near_center_df
 
     def simulate_bead_dispersion(self, read_count, focal_bead_idx):
@@ -143,6 +144,7 @@ class BaseSimulation:
         sample_df = self.round_coordinates(sample_df)
 
         # Get the proper indices corresponding to the original bead_df.
+        sample_df["subtraction_index"] = sample_df.index - self.central_bead_idx
         sample_df.index = sample_df.merge(
             self.bead_df.reset_index(), on=["x_coord", "y_coord"], how="left"
         )["index"]
