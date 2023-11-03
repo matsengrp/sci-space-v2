@@ -25,8 +25,10 @@ class BaseSimulation:
         self.bead_df = self.build_hexagonal_grid(row_count, beads_per_row)
         self.central_bead_idx = len(self.bead_df) // 2
         central_bead = self.bead_df.iloc[self.central_bead_idx]
-        self.central_bead_x = central_bead["x_coord"]
-        self.central_bead_y = central_bead["y_coord"]
+        self.central_bead_x_coord = central_bead["x_coord"]
+        self.central_bead_y_coord = central_bead["y_coord"]
+        self.central_bead_x_pos = central_bead["x_pos"]
+        self.central_bead_y_pos = central_bead["y_pos"]
         self.beads_near_center_df = self.build_beads_near_center_df(self.bead_df)
         self.max_x = np.max(self.bead_df["x_coord"])
         self.max_y = np.max(self.bead_df["y_coord"])
@@ -37,22 +39,22 @@ class BaseSimulation:
         return df
 
     def build_hexagonal_grid(self, row_count, beads_per_row):
-        coords = []
+        grid_data = []
 
         # Vertical spacing between rows
         delta_y = self.bead_diameter * np.sqrt(3) / 2
 
-        for i in range(row_count):
-            y = i * delta_y
+        for y_pos in range(row_count):
+            y = y_pos * delta_y
 
             # Every other row is shifted
-            start_x = (self.bead_diameter / 2) * (i % 2)
+            start_x = (self.bead_diameter / 2) * (y_pos % 2)
 
-            for j in range(beads_per_row):
-                x = start_x + j * self.bead_diameter
-                coords.append((x, y))
+            for x_pos in range(beads_per_row):
+                x = start_x + x_pos * self.bead_diameter
+                grid_data.append((x_pos, y_pos, x, y))
 
-        df = pd.DataFrame(coords, columns=["x_coord", "y_coord"])
+        df = pd.DataFrame(grid_data, columns=["x_pos", "y_pos", "x_coord", "y_coord"])
         df = self.round_coordinates(df)
         return df
 
@@ -68,10 +70,17 @@ class BaseSimulation:
             self.beads_near_center_df,
             ax,
             color=ListedColormap(["#e66101"]).colors[0],
+            edgecolors="black",
             alpha=self.beads_near_center_df["weight"]
             / np.max(self.beads_near_center_df["weight"]),
         )
-        ax.set_title("Hexagonal Grid Showing weight Function from Central Bead")
+        self.plot_grid(
+            self.beads_near_center_df,
+            ax,
+            color='none',
+            edgecolors="gray",
+        )
+        ax.set_title("Hexagonal Grid Showing Weight Function from Central Bead")
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
         plt.show()
@@ -79,10 +88,10 @@ class BaseSimulation:
     def build_beads_near_center_df(self, bead_df):
         # First we build a bounding rectangle around the central bead to avoid
         # calculating distances for all beads
-        x_min = self.central_bead_x - self.max_dispersion_radius
-        x_max = self.central_bead_x + self.max_dispersion_radius
-        y_min = self.central_bead_y - self.max_dispersion_radius
-        y_max = self.central_bead_y + self.max_dispersion_radius
+        x_min = self.central_bead_x_coord - self.max_dispersion_radius
+        x_max = self.central_bead_x_coord + self.max_dispersion_radius
+        y_min = self.central_bead_y_coord - self.max_dispersion_radius
+        y_max = self.central_bead_y_coord + self.max_dispersion_radius
 
         # Filter beads within bounding rectangle
         bounded_df = bead_df[
@@ -94,8 +103,8 @@ class BaseSimulation:
 
         # Calculate distances for the beads within bounding rectangle
         bounded_df["dist_from_center"] = np.sqrt(
-            (bounded_df["x_coord"] - self.central_bead_x) ** 2
-            + (bounded_df["y_coord"] - self.central_bead_y) ** 2
+            (bounded_df["x_coord"] - self.central_bead_x_coord) ** 2
+            + (bounded_df["y_coord"] - self.central_bead_y_coord) ** 2
         )
 
         # Final filter based on exact distance
@@ -106,12 +115,18 @@ class BaseSimulation:
             self.weight_fn
         )
         beads_near_center_df["x_displacement"] = (
-            beads_near_center_df["x_coord"] - self.central_bead_x
+            beads_near_center_df["x_coord"] - self.central_bead_x_coord
         )
         beads_near_center_df["y_displacement"] = (
-            beads_near_center_df["y_coord"] - self.central_bead_y
+            beads_near_center_df["y_coord"] - self.central_bead_y_coord
         )
         beads_near_center_df = self.round_coordinates(beads_near_center_df)
+        beads_near_center_df["delta_x_pos"] = (
+            beads_near_center_df["x_pos"] - self.central_bead_x_pos
+        )
+        beads_near_center_df["delta_y_pos"] = (
+            beads_near_center_df["y_pos"] - self.central_bead_y_pos
+        )
         return beads_near_center_df
 
     def simulate_bead_dispersion(self, read_count, focal_bead_idx):
@@ -125,6 +140,12 @@ class BaseSimulation:
 
         sample_df["x_coord"] = focal_bead_x + sample_df["x_displacement"]
         sample_df["y_coord"] = focal_bead_y + sample_df["y_displacement"]
+
+        focal_bead_x_pos = self.bead_df.iloc[focal_bead_idx]["x_pos"]
+        focal_bead_y_pos = self.bead_df.iloc[focal_bead_idx]["y_pos"]
+
+        sample_df["x_pos"] = focal_bead_x_pos + sample_df["delta_x_pos"]
+        sample_df["y_pos"] = focal_bead_y_pos + sample_df["delta_y_pos"]
 
         # Filter out beads that are outside the grid.
         sample_df = sample_df[
@@ -147,12 +168,16 @@ class BaseSimulation:
         sample_df["bead_counts"] = np.random.multinomial(read_count, bead_probs)
         # Filter out beads with zero counts.
         sample_df = sample_df[sample_df["bead_counts"] > 0]
-        sample_df = sample_df[["x_coord", "y_coord", "bead_counts"]]
+        sample_df = sample_df[["x_pos", "y_pos", "x_coord", "y_coord", "bead_counts"]]
         sample_df = self.round_coordinates(sample_df)
 
         # Get the proper indices corresponding to the original bead_df.
-        sample_df.index -= self.central_bead_idx
-        assert min(sample_df.index) >= 0
+        rows_pre_merge = len(sample_df)
+        sample_df = sample_df.merge(
+            self.bead_df.reset_index(), on=["x_pos", "y_pos"], how="inner"
+        )[["x_pos", "y_pos", "bead_counts", "index"]]
+        assert len(sample_df) == rows_pre_merge
+        sample_df.set_index("index", inplace=True)
         return sample_df
 
     def plot_sample(self, read_count, focal_bead_idx):
@@ -165,6 +190,13 @@ class BaseSimulation:
             color=ListedColormap(["#e66101"]).colors[0],
             alpha=sample_df["bead_counts"] / np.max(sample_df["bead_counts"]),
         )
+        
+        # Add blue circle for the focal bead
+        focal_x = self.bead_df.loc[focal_bead_idx]["x_coord"]
+        focal_y = self.bead_df.loc[focal_bead_idx]["y_coord"]
+        ax.scatter(focal_x, focal_y, color="blue",  edgecolors=None, zorder=3)
+        # s=(self.bead_diameter**2)*100,
+        
         ax.set_title("Hexagonal Grid with Sampled Beads Highlighted")
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
