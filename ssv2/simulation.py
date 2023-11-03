@@ -19,7 +19,9 @@ class BaseSimulation:
         self.max_dispersion_radius = max_dispersion_radius
         # TODO-- this is a hack
         self.max_dispersion_scale = max_dispersion_radius / 2
-        self.decay_fn = lambda r: self.max_dispersion_scale / (r**2) if r != 0 else 1
+        self.weight_fn = (
+            lambda r: self.max_dispersion_scale / (r**2) if r != 0 else 0.0
+        )
         self.bead_df = self.build_hexagonal_grid(row_count, beads_per_row)
         self.central_bead_idx = len(self.bead_df) // 2
         central_bead = self.bead_df.iloc[self.central_bead_idx]
@@ -30,8 +32,8 @@ class BaseSimulation:
         self.max_y = np.max(self.bead_df["y_coord"])
 
     def round_coordinates(self, df):
-        df["x_coord"] = df["x_coord"].apply(lambda x: round(x, 3))
-        df["y_coord"] = df["y_coord"].apply(lambda x: round(x, 3))
+        df["x_coord"] = df["x_coord"].apply(lambda x: round(x, 7))
+        df["y_coord"] = df["y_coord"].apply(lambda x: round(x, 7))
         return df
 
     def build_hexagonal_grid(self, row_count, beads_per_row):
@@ -66,10 +68,10 @@ class BaseSimulation:
             self.beads_near_center_df,
             ax,
             color=ListedColormap(["#e66101"]).colors[0],
-            alpha=self.beads_near_center_df["decay"]
-            / np.max(self.beads_near_center_df["decay"]),
+            alpha=self.beads_near_center_df["weight"]
+            / np.max(self.beads_near_center_df["weight"]),
         )
-        ax.set_title("Hexagonal Grid with Central Beads Highlighted")
+        ax.set_title("Hexagonal Grid Showing weight Function from Central Bead")
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
         plt.show()
@@ -99,9 +101,9 @@ class BaseSimulation:
         # Final filter based on exact distance
         beads_near_center_df = bounded_df[
             bounded_df["dist_from_center"] <= self.max_dispersion_radius
-        ]
-        beads_near_center_df["decay"] = beads_near_center_df["dist_from_center"].apply(
-            self.decay_fn
+        ].copy()
+        beads_near_center_df["weight"] = beads_near_center_df["dist_from_center"].apply(
+            self.weight_fn
         )
         beads_near_center_df["x_displacement"] = (
             beads_near_center_df["x_coord"] - self.central_bead_x
@@ -113,7 +115,9 @@ class BaseSimulation:
         return beads_near_center_df
 
     def simulate_bead_dispersion(self, read_count, focal_bead_idx):
-         # filter out beads that are outside the grid
+        # Our strategy is to start with the dataframe of beads near the center,
+        # and then move that dataframe to the focal bead's location, making
+        # modifications as needed.
         sample_df = self.beads_near_center_df.copy()
 
         focal_bead_x = self.bead_df.iloc[focal_bead_idx]["x_coord"]
@@ -122,6 +126,7 @@ class BaseSimulation:
         sample_df["x_coord"] = focal_bead_x + sample_df["x_displacement"]
         sample_df["y_coord"] = focal_bead_y + sample_df["y_displacement"]
 
+        # Filter out beads that are outside the grid.
         sample_df = sample_df[
             (sample_df["x_coord"] >= 0)
             & (sample_df["x_coord"] <= self.max_x)
@@ -130,27 +135,26 @@ class BaseSimulation:
         ]
 
         # We will start with an unnormalized probability distribution
-        # proportional to the decay values.
-        bead_probs = sample_df["decay"].values
+        # proportional to the weight values.
+        bead_probs = sample_df["weight"].values
         # We then sample for which beads are compatible.
         bead_probs *= np.random.binomial(1, self.prob_beads_compatible, len(bead_probs))
+        # Set the zero element to 0, because a bead cannot be compatible with itself.
+        bead_probs[0] = 0.0
         # Normalize the probabilities.
         bead_probs /= np.sum(bead_probs)
         # Sample from a multinomial distribution.
         sample_df["bead_counts"] = np.random.multinomial(read_count, bead_probs)
         # Filter out beads with zero counts.
         sample_df = sample_df[sample_df["bead_counts"] > 0]
-        sample_df = sample_df[["x_coord", "y_coord", "bead_counts"]]        
+        sample_df = sample_df[["x_coord", "y_coord", "bead_counts"]]
         sample_df = self.round_coordinates(sample_df)
 
         # Get the proper indices corresponding to the original bead_df.
-        sample_df["subtraction_index"] = sample_df.index - self.central_bead_idx
-        sample_df.index = sample_df.merge(
-            self.bead_df.reset_index(), on=["x_coord", "y_coord"], how="left"
-        )["index"]
+        sample_df.index -= self.central_bead_idx
+        assert min(sample_df.index) >= 0
         return sample_df
 
-       
     def plot_sample(self, read_count, focal_bead_idx):
         sample_df = self.simulate_bead_dispersion(read_count, focal_bead_idx)
         fig, ax = plt.subplots()
@@ -166,4 +170,3 @@ class BaseSimulation:
         ax.set_ylabel("Y Coordinate")
         plt.show()
         print(sample_df)
-

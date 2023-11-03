@@ -11,6 +11,7 @@ setup(
         "numpy",
         "matplotlib",
         "pandas",
+        "pytest",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
