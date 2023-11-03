@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from matplotlib.colors import ListedColormap
+from tqdm import tqdm
 
 
 class BaseSimulation:
@@ -180,3 +180,16 @@ class BaseSimulation:
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
         return fig
+
+    def simulate_experiment(self, read_counts):
+        simulated_beads = []
+
+        for source_bead in tqdm(range(len(self.bead_df))):
+            read_count = np.random.choice(read_counts)
+            df = self.simulate_bead_dispersion(read_count, source_bead)["bead_counts"]
+
+            df = df.reset_index().rename(columns={df.index.name: "target_bead"})
+            df["source_bead"] = source_bead
+            simulated_beads.append(df)
+
+        return pd.concat(simulated_beads)[["source_bead", "target_bead", "bead_counts"]]

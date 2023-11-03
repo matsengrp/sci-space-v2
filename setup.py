@@ -12,6 +12,7 @@ setup(
         "matplotlib",
         "pandas",
         "pytest",
+        "tqdm",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
