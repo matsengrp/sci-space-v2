@@ -155,3 +155,4 @@ cython_debug/
 # general
 .DS_Store
 .vscode
+_data
