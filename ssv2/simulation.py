@@ -6,19 +6,53 @@ from tqdm import tqdm
 
 
 class BaseSimulation:
+    """Do simulation of bead dispersion.
+
+    A key thing to understand is that the simulation is done in terms of
+    x_pos and y_pos, which are integer coordinates of the beads in the hexagonal
+    grid. The x_coord and y_coord are the actual euclidean coordinates of the
+    beads, but we only compute them sometimes: for calculation of dispersion and
+    for plotting.
+
+    The reason we do this is because we can match on these x_pos and y_pos
+    values without error. If we were to use the x_coord and y_coord values,
+    we encounter difficulties with floating point error.
+
+    This enables us to do a lot of computation once for dispersion in the middle
+    of the grid, and then just move the dataframe to the focal bead's location,
+    mask out things from the dataframe that are outside the grid, and then
+    sample from a multinomial distribution.
+
+    Parameters
+    ----------
+    row_count : int
+        The number of rows in the hexagonal grid.
+    beads_per_row : int
+        The number of beads per row in the grid.
+    max_dispersion_radius : int
+        The maximum dispersion radius around a focal bead.
+    max_dispersion_scale : float
+        The scale to apply to the weight function of dispersion.
+    bead_diameter : float, optional
+        The physical diameter of a bead. Defaults to 1.
+    bead_type_count : int, optional
+        The number of distinct bead types, used for computing bead
+        compabilitity. Defaults to 20.
+    """
+
     def __init__(
         self,
         row_count,
         beads_per_row,
+        max_dispersion_radius,
+        max_dispersion_scale,
         bead_diameter=1,
         bead_type_count=20,
-        max_dispersion_radius=10,
     ):
         self.bead_diameter = bead_diameter
         self.prob_beads_compatible = (bead_type_count - 1) / bead_type_count
         self.max_dispersion_radius = max_dispersion_radius
-        # TODO-- this is a hack
-        self.max_dispersion_scale = max_dispersion_radius / 2
+        self.max_dispersion_scale = max_dispersion_scale
         self.weight_fn = (
             lambda r: self.max_dispersion_scale / (r**2) if r != 0 else 0.0
         )
@@ -32,6 +66,7 @@ class BaseSimulation:
         self.max_y = np.max(self.bead_df["y_pos"])
 
     def build_hexagonal_grid(self, row_count, beads_per_row):
+        """Build the basic hexagonal grid in terms of x and y positions."""
         grid_data = [
             (x_pos, y_pos)
             for y_pos in range(row_count)
@@ -41,6 +76,7 @@ class BaseSimulation:
         return df
 
     def compute_coords_from_pos(self, row):
+        """Compute the x and y coordinates from the x_pos and y_pos values."""
         delta_y = self.bead_diameter * np.sqrt(3) / 2
         y = row["y_pos"] * delta_y
         start_x = (self.bead_diameter / 2) * (row["y_pos"] % 2)
@@ -48,6 +84,7 @@ class BaseSimulation:
         return x, y
 
     def add_coords(self, df_with_pos):
+        """Add x and y coordinates to a dataframe with x_pos and y_pos columns."""
         df = df_with_pos.copy()
         df["x_coord"], df["y_coord"] = zip(
             *df.apply(self.compute_coords_from_pos, axis=1)
@@ -64,6 +101,7 @@ class BaseSimulation:
         )
 
     def plot_setting(self):
+        """Plot the hexagonal grid with beads near the center along with their weight."""
         fig, ax = plt.subplots()
         self.plot_grid(self.bead_df, ax, edgecolors="gray", alpha=0.05)
         self.plot_grid(
@@ -86,24 +124,33 @@ class BaseSimulation:
         plt.show()
 
     def build_beads_near_center_df(self, bead_df):
+        """This is a key aspect of the simulation. We build a dataframe of beads
+        that are close to the center, and calculate their weights. We then use
+        this dataframe repeatedly for other beads, masking to handle edges and
+        then drawing from a multinomial distribution.
+        """
+        # Make a new copy and add coordinates.
         beads_near_center_df = self.add_coords(bead_df)
 
         central_bead_x_coord, central_bead_y_coord = self.compute_coords_from_pos(
             {"x_pos": self.central_bead_x_pos, "y_pos": self.central_bead_y_pos}
         )
 
-        # Calculate distances for the beads within bounding rectangle
+        # Calculate distances from the center.
         beads_near_center_df["dist_from_center"] = np.sqrt(
             (beads_near_center_df["x_coord"] - central_bead_x_coord) ** 2
             + (beads_near_center_df["y_coord"] - central_bead_y_coord) ** 2
         )
 
+        # Filter out beads that are too far from the center.
         beads_near_center_df = beads_near_center_df[
             beads_near_center_df["dist_from_center"] <= self.max_dispersion_radius
         ].copy()
         beads_near_center_df["weight"] = beads_near_center_df["dist_from_center"].apply(
             self.weight_fn
         )
+
+        # Calculate the relative x and y positions from the center.
         beads_near_center_df["delta_x_pos"] = (
             beads_near_center_df["x_pos"] - self.central_bead_x_pos
         )
@@ -113,6 +160,7 @@ class BaseSimulation:
         return beads_near_center_df
 
     def simulate_bead_dispersion(self, read_count, focal_bead_idx):
+        """This is the main routine for the simulation."""
         # Our strategy is to start with the dataframe of beads near the center,
         # and then move that dataframe to the focal bead's location, making
         # modifications as needed.
@@ -153,6 +201,7 @@ class BaseSimulation:
             self.bead_df.reset_index(), on=["x_pos", "y_pos"], how="inner"
         )[["x_pos", "y_pos", "bead_counts", "index"]]
         assert len(sample_df) == rows_pre_merge
+        # We adopt the authoritative index of the beads as per the original bead_df.
         sample_df.set_index("index", inplace=True)
         return sample_df
 
@@ -182,6 +231,7 @@ class BaseSimulation:
         return fig
 
     def simulate_experiment(self, read_counts):
+        """Simulate an experiment with read counts drawn randomly from the read_counts np.array."""
         simulated_beads = []
 
         for source_bead in tqdm(range(len(self.bead_df))):
