@@ -8,10 +8,15 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=[
-        "numpy",
+        "ipywidgets",
         "matplotlib",
+        "numpy",
         "pandas",
+        "plotnine",
         "pytest",
+        "requests",
+        "scipy",
+        "seaborn",
         "tqdm",
     ],
     classifiers=[
