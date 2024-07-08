@@ -33,6 +33,11 @@ class BaseSimulation:
         The maximum dispersion radius around a focal bead.
     max_dispersion_scale : float
         The scale to apply to the weight function of dispersion.
+    joint_sums : pd.DataFrame
+        A dataframe of joint sums of read counts, including columns `row_sums`
+        and `col_sums`. This dataframe will serve as the joint empirical
+        distribution of the read counts for those beads. It will be repeated if
+        it's not sufficiently long to match the number of beads.
     bead_diameter : float, optional
         The physical diameter of a bead. Defaults to 1.
     bead_type_count : int, optional
@@ -46,6 +51,7 @@ class BaseSimulation:
         beads_per_row,
         max_dispersion_radius,
         max_dispersion_scale,
+        joint_sums,
         bead_diameter=1,
         bead_type_count=20,
     ):
@@ -53,9 +59,7 @@ class BaseSimulation:
         self.prob_beads_compatible = (bead_type_count - 1) / bead_type_count
         self.max_dispersion_radius = max_dispersion_radius
         self.max_dispersion_scale = max_dispersion_scale
-        self.weight_fn = (
-            lambda r: self.max_dispersion_scale / (r**2) if r != 0 else 0.0
-        )
+        self.weight_fn = lambda r: self.max_dispersion_scale / (r**2) if r != 0 else 0.0
         self.bead_df = self.build_hexagonal_grid(row_count, beads_per_row)
         self.central_bead_idx = len(self.bead_df) // 2
         central_bead = self.bead_df.iloc[self.central_bead_idx]
@@ -64,6 +68,14 @@ class BaseSimulation:
         self.beads_near_center_df = self.build_beads_near_center_df(self.bead_df)
         self.max_x = np.max(self.bead_df["x_pos"])
         self.max_y = np.max(self.bead_df["y_pos"])
+
+        # assign "row_sums" and "col_sums" as columns to self.bead_df, repeating the values as necessary to fill out the dataframe
+        repetitions = len(self.bead_df) // len(joint_sums) + 1
+        repeated_joint_sums = pd.concat([joint_sums] * repetitions, ignore_index=True)
+        repeated_joint_sums = repeated_joint_sums.iloc[: len(self.bead_df)]
+        self.bead_df["row_sums"] = repeated_joint_sums["row_sums"]
+        self.bead_df["col_sums"] = repeated_joint_sums["col_sums"]
+        self.indexed_bead_df = self.bead_df.set_index(["x_pos", "y_pos"])
 
     def build_hexagonal_grid(self, row_count, beads_per_row):
         """Build the basic hexagonal grid in terms of x and y positions."""
@@ -94,10 +106,7 @@ class BaseSimulation:
     def plot_grid(self, df, ax, **kwargs):
         my_df = self.add_coords(df)
         ax.scatter(
-            my_df["x_coord"],
-            my_df["y_coord"],
-            s=(self.bead_diameter**2) * 75,
-            **kwargs
+            my_df["x_coord"], my_df["y_coord"], s=(self.bead_diameter**2) * 75, **kwargs
         )
 
     def plot_setting(self):
@@ -159,7 +168,7 @@ class BaseSimulation:
         )
         return beads_near_center_df
 
-    def simulate_bead_dispersion(self, read_count, focal_bead_idx):
+    def simulate_bead_dispersion(self, focal_bead_idx):
         """This is the main routine for the simulation."""
         # Our strategy is to start with the dataframe of beads near the center,
         # and then move that dataframe to the focal bead's location, making
@@ -178,6 +187,17 @@ class BaseSimulation:
             & (sample_df["x_pos"] <= self.max_x)
             & (sample_df["y_pos"] >= 0)
             & (sample_df["y_pos"] <= self.max_y)
+        ]
+        sample_df = sample_df.set_index(["x_pos", "y_pos"])
+        # Note indexing magic. Because we are using the x_pos and y_pos as the
+        # index in both data frames, assignment just works.
+        sample_df["col_sums"] = self.indexed_bead_df["col_sums"]
+        # Scale the weights by the column sums, which represent the natural
+        # "attractiveness" of the beads.
+        sample_df["weight"] = sample_df["weight"] * sample_df["col_sums"]
+        sample_df.reset_index(inplace=True)
+        read_count = self.indexed_bead_df.loc[focal_bead_x_pos, focal_bead_y_pos][
+            "row_sums"
         ]
 
         # We will start with an unnormalized probability distribution
@@ -205,10 +225,8 @@ class BaseSimulation:
         sample_df.set_index("index", inplace=True)
         return sample_df
 
-    def plot_sample(self, read_count, focal_bead_idx):
-        sample_df = self.add_coords(
-            self.simulate_bead_dispersion(read_count, focal_bead_idx)
-        )
+    def plot_sample(self, focal_bead_idx):
+        sample_df = self.add_coords(self.simulate_bead_dispersion(focal_bead_idx))
         bead_df = self.add_coords(self.bead_df)
         fig, ax = plt.subplots()
         self.plot_grid(bead_df, ax, edgecolors="gray", alpha=0.05)
@@ -230,13 +248,12 @@ class BaseSimulation:
         ax.set_ylabel("Y Coordinate")
         return fig
 
-    def simulate_experiment(self, read_counts):
+    def simulate_experiment(self):
         """Simulate an experiment with read counts drawn randomly from the read_counts np.array."""
         simulated_beads = []
 
         for source_bead in tqdm(range(len(self.bead_df))):
-            read_count = np.random.choice(read_counts)
-            df = self.simulate_bead_dispersion(read_count, source_bead)["bead_counts"]
+            df = self.simulate_bead_dispersion(source_bead)["bead_counts"]
 
             df = df.reset_index().rename(columns={df.index.name: "target_bead"})
             df["source_bead"] = source_bead
